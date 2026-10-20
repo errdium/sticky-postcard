@@ -5,19 +5,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Sticky & Buba</title>
 <!--
-  STICKY & BUBA — interactive story scene
+  FILES YOU NEED (same folder as this HTML):
+    - music.mp3   → disco background music (before Buba appears)
+    - music2.mp3  → dance music (when Buba says "let's dance together")
 
-  Files you need to provide (put them in the SAME folder as this HTML):
-    - music.mp3   → disco background music (plays after the trash scene)
-    - music2.mp3  → dance music (plays when Buba says "let's all dance together!")
-
-  Both audio files are optional in the sense that the scene won't crash
-  if they're missing — but the disco/dance parts will be silent.
-
-  Controls:
-    - Mouse / touch drag: drag the smoking box into the trash can
-    - Keyboard: Tab to focus buttons, Enter to submit the name
-    - Escape: closes any open dialog
+  Fixes in this version:
+    • Both music tracks no longer loop / restart — each plays once.
+    • Disco effect follows the FIRST music's length: it stays on
+      until Sticky returns with the second box, then fades out.
+    • Dance music + disco both fade out smoothly together when
+      the stickmen stop dancing.
 -->
 <style>
   *, *::before, *::after { box-sizing: border-box; }
@@ -29,7 +26,6 @@
   }
   #scene { position: fixed; inset: 0; display: block; width: 100%; height: 100%; }
 
-  /* ---------- Choices ---------- */
   #choices {
     position: fixed; display: none; flex-direction: row; flex-wrap: wrap;
     justify-content: center; gap: 10px; transform: translateX(-50%);
@@ -47,7 +43,6 @@
   .choice-btn:active { transform: scale(.96); }
   .choice-btn:focus-visible { outline: 3px solid #e11d48; outline-offset: 3px; }
 
-  /* ---------- Name input ---------- */
   #nameForm {
     position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%);
     display: none; align-items: center; gap: 10px;
@@ -76,7 +71,6 @@
     #nameForm label { font-size: 13px; }
     #nameForm button { padding: 8px 14px; font-size: 14px; }
   }
-
   @media (prefers-reduced-motion: reduce) {
     .choice-btn, #nameForm { transition-duration: .01ms !important; }
   }
@@ -104,8 +98,7 @@
     upperArm: 21, foreArm: 19, hipHeight: 44,
     stride: 46, stepH: 13, stance: 0.62
   };
-  var reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  var TYPING_SPEED = 46;   // characters per second
+  var TYPING_SPEED = 46;
 
   /* ============================================================
      CANVAS
@@ -145,17 +138,13 @@
   var buba = makeChar();
   buba.danceOffset = 0.7;
 
-  /* ============================================================
-     CLOCK
-     ============================================================ */
   var clock = 0;
 
   /* ============================================================
-     GEOMETRY / IK
+     IK HELPERS
      ============================================================ */
   function lerp(a, b, t) { return a + (b - a) * t; }
   function lerpPt(a, b, t) { return [lerp(a[0], b[0], t), lerp(a[1], b[1], t)]; }
-  function easeInOut(t) { return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2; }
   function clamp(v, a, b) { return Math.min(b, Math.max(a, v)); }
 
   function solveIK(root, end, l1, l2, bendDir) {
@@ -217,12 +206,10 @@
     var armNearA = lerp(armWnear, armInear, idle);
     var armFarA = lerp(armWfar, armIfar, idle);
 
-    // crouch
     hipY = lerp(hipY, -17, c.crouch);
     footNear = lerpPt(footNear, [9, 0], c.crouch);
     footFar = lerpPt(footFar, [-9, 0], c.crouch);
 
-    // tucked legs (jump)
     if (c.tuck > 0.001) {
       footNear = lerpPt(footNear, [7, -16], c.tuck);
       footFar = lerpPt(footFar, [-7, -16], c.tuck);
@@ -244,7 +231,6 @@
     var armNear = armPts(shoulder, nearA, idle);
     var armFar = armPts(shoulder, farA, idle);
 
-    // arms reaching for box
     if (c.reach > 0.001) {
       var ikN = solveIK(shoulder, c.reachPoint, CFG.upperArm, CFG.foreArm, 1);
       var ikF = solveIK(shoulder, [c.reachPoint[0] - 8, c.reachPoint[1] + 2], CFG.upperArm, CFG.foreArm, 1);
@@ -262,7 +248,6 @@
      CHARACTER UPDATE
      ============================================================ */
   function updateChar(c, dt) {
-    // ---- flight after explosion ----
     if (c.flight) {
       var f = c.flight;
       f.t += dt;
@@ -271,16 +256,12 @@
       c.jumpY = -4 * f.h * u * (1 - u);
       c.rotation = -Math.PI * 2 * u;
       if (u >= 1) {
-        c.flight = null;
-        c.jumpY = 0;
-        c.rotation = 0;
-        c.x = f.x1;
-        c.emotion = 'surprised';
+        c.flight = null; c.jumpY = 0; c.rotation = 0;
+        c.x = f.x1; c.emotion = 'surprised';
       }
       return;
     }
 
-    // ---- dance ----
     if (c.dancing) {
       c.danceT += dt;
       var cycle = 1.45;
@@ -289,17 +270,17 @@
       var type = (idx + Math.round(c.danceOffset * 7)) % 3;
       var jump = Math.sin(Math.PI * lt);
 
-      if (type === 0) {                       // jump with arms up
+      if (type === 0) {
         c.jumpY = -jump * 58 * scale;
         c.rotation = 0;
         c.armsUp = Math.min(1, jump * 1.4);
         c.tuck = jump * 0.55;
-      } else if (type === 1) {                // backflip
+      } else if (type === 1) {
         c.jumpY = -jump * 105 * scale;
         c.rotation = -Math.PI * 2 * lt;
         c.armsUp = 0.25 * jump;
         c.tuck = 0.85 * jump;
-      } else {                                // frontflip
+      } else {
         c.jumpY = -jump * 88 * scale;
         c.rotation = Math.PI * 2 * lt;
         c.armsUp = 0.15 * jump;
@@ -320,12 +301,10 @@
       }
     }
 
-    // ---- crouch / pull ----
     c.crouch += (c.crouchTarget - c.crouch) * Math.min(1, dt * 7);
     c.reach += (c.reachTarget - c.reach) * Math.min(1, dt * 9);
     c.pull += (c.pullTarget - c.pull) * Math.min(1, dt * 3);
 
-    // ---- turning around ----
     if (c.turning) {
       c.turnT += dt / 0.32;
       if (c.turnT >= 1) {
@@ -376,8 +355,7 @@
      BOX
      ============================================================ */
   var box = {
-    x: 0, y: 0, vx: 0,
-    w: 52, h: 42,
+    x: 0, y: 0, vx: 0, w: 52, h: 42,
     lidOpen: 0, lidTarget: 0,
     visible: false, attached: false,
     smoking: false, smokeAcc: 0, smokeLife: 0,
@@ -385,17 +363,12 @@
   };
   var rope = { ax: 0, ay: 0, init: false, alpha: 0 };
 
-  function sizeBox() {
-    box.w = 52 * scale;
-    box.h = 42 * scale;
-  }
+  function sizeBox() { box.w = 52 * scale; box.h = 42 * scale; }
 
   function updateBox(dt) {
     box.lidOpen += (box.lidTarget - box.lidOpen) * Math.min(1, dt * 7);
-
     if (!box.visible) return;
 
-    // animation into trash
     if (box.animTrash) {
       var a = box.animTrash;
       a.t += dt / 0.5;
@@ -407,14 +380,12 @@
       return;
     }
 
-    // fall to the ground (after drag)
     if (!box.attached) {
       var gy = groundY - box.h / 2;
       if (box.y < gy) box.y += (gy - box.y) * Math.min(1, dt * 12);
       else box.y = gy;
     }
 
-    // rope
     if (box.attached && sticky.visible) {
       var pose = getPose(sticky);
       var hipY = groundY + pose.hip[1] * scale;
@@ -432,14 +403,12 @@
       var ropeLen = 54 * scale;
       var tautX = rope.ax + ropeLen * behind;
       var excess = (box.x - tautX) * behind;
-
       if (excess > 0) box.vx += (tautX - box.x) * 26 * dt;
 
       box.vx *= Math.pow(0.08, dt);
       if (Math.abs(box.vx) < 0.3) box.vx = 0;
       box.x += box.vx * dt;
 
-      // box must not roll over the stickman
       var minGap = 32 * scale + box.w / 2;
       if (behind > 0 && box.x < sticky.x + minGap) { box.x = sticky.x + minGap; if (box.vx < 0) box.vx = 0; }
       if (behind < 0 && box.x > sticky.x - minGap) { box.x = sticky.x - minGap; if (box.vx > 0) box.vx = 0; }
@@ -449,17 +418,13 @@
       rope.alpha += (0 - rope.alpha) * Math.min(1, dt * 6);
     }
 
-    // smoke
     if (box.smoking) {
       box.smokeLife += dt;
       var rate = Math.max(2.5, 14 - box.smokeLife * 0.9);
       box.smokeAcc += dt * rate;
       while (box.smokeAcc >= 1) {
         box.smokeAcc -= 1;
-        spawnSmoke(
-          box.x + (Math.random() - 0.5) * box.w * 0.7,
-          box.y - box.h * 0.45
-        );
+        spawnSmoke(box.x + (Math.random() - 0.5) * box.w * 0.7, box.y - box.h * 0.45);
       }
     }
   }
@@ -485,8 +450,7 @@
       r: (4 + Math.random() * 7) * scale,
       grow: 16 * scale,
       life: 1.5 + Math.random() * 1.8,
-      max: 3.3,
-      col: '150,150,155',
+      max: 3.3, col: '150,150,155',
       alphaMax: 0.30 + Math.random() * 0.22
     });
   }
@@ -504,8 +468,7 @@
         r: (1.5 + Math.random() * 4.5) * scale,
         grow: -1 * scale,
         life: 0.5 + Math.random() * 0.9,
-        max: 1.4,
-        col: colors[(Math.random() * colors.length) | 0],
+        max: 1.4, col: colors[(Math.random() * colors.length) | 0],
         alphaMax: 0.95
       });
     }
@@ -520,8 +483,7 @@
         r: (8 + Math.random() * 14) * scale,
         grow: 24 * scale,
         life: 1.6 + Math.random() * 1.6,
-        max: 3.2,
-        col: '90,88,86',
+        max: 3.2, col: '90,88,86',
         alphaMax: 0.42
       });
     }
@@ -561,7 +523,75 @@
   function updateDisco(dt) {
     disco.t += dt;
     var target = disco.on ? 1 : 0;
-    disco.intensity += (target - disco.intensity) * Math.min(1, dt * 2.2);
+    // fade in fast, fade out gentle
+    var rate = disco.on ? 3.0 : 1.4;
+    disco.intensity += (target - disco.intensity) * Math.min(1, dt * rate);
+    if (disco.intensity < 0.002) disco.intensity = 0;
+  }
+
+  /* ============================================================
+     AUDIO — no loop, no restart, smooth fade in/out
+     ============================================================ */
+  var music1 = new Audio('music.mp3');
+  music1.loop = false;
+  music1.volume = 0;
+  music1.addEventListener('error', function () {});
+  music1.addEventListener('ended', function () {
+    audioState.m1.playing = false;
+    audioState.m1.cur = 0;
+    audioState.m1.target = 0;
+    // natural end: disco fades too if we're still in the disco phase
+    if (st && st.name === 'discoWait') disco.on = false;
+  });
+
+  var music2 = new Audio('music2.mp3');
+  music2.loop = false;
+  music2.volume = 0;
+  music2.addEventListener('error', function () {});
+  music2.addEventListener('ended', function () {
+    audioState.m2.playing = false;
+    audioState.m2.cur = 0;
+    audioState.m2.target = 0;
+  });
+
+  var audioState = {
+    m1: { el: music1, cur: 0, target: 0, playing: false },
+    m2: { el: music2, cur: 0, target: 0, playing: false }
+  };
+
+  function startMusic(s) {
+    if (s.playing) return;   // never restart an already-playing track
+    try {
+      s.el.currentTime = 0;
+      s.el.volume = 0;
+      s.cur = 0;
+      s.target = 0.45;
+      s.playing = true;
+      var p = s.el.play();
+      if (p && p.catch) p.catch(function () {});
+    } catch (e) {}
+  }
+
+  function fadeOutMusic(s) {
+    s.target = 0;
+  }
+
+  function updateMusic(dt) {
+    var states = [audioState.m1, audioState.m2];
+    var rate = 0.55;   // volume units per second
+    for (var i = 0; i < states.length; i++) {
+      var s = states[i];
+      if (!s.playing) continue;
+      var diff = s.target - s.cur;
+      var step = rate * dt;
+      if (Math.abs(diff) <= step) s.cur = s.target;
+      else s.cur += (diff > 0 ? 1 : -1) * step;
+      try { s.el.volume = Math.max(0, Math.min(1, s.cur)); } catch (e) {}
+      if (s.target === 0 && s.cur <= 0.001) {
+        try { s.el.pause(); } catch (e) {}
+        s.playing = false;
+      }
+    }
   }
 
   /* ============================================================
@@ -666,23 +696,7 @@
   }
 
   /* ============================================================
-     AUDIO
-     ============================================================ */
-  var music1 = new Audio('music.mp3');   // disco background
-  music1.loop = true; music1.volume = 0.45;
-  var music2 = new Audio('music2.mp3');  // dance music
-  music2.loop = true; music2.volume = 0.45;
-  [music1, music2].forEach(function (a) {
-    a.addEventListener('error', function () {});
-  });
-
-  function play(a) {
-    try { a.currentTime = 0; var p = a.play(); if (p && p.catch) p.catch(function () {}); } catch (e) {}
-  }
-  function stop(a) { try { a.pause(); a.currentTime = 0; } catch (e) {} }
-
-  /* ============================================================
-     STORY
+     STORY STATE
      ============================================================ */
   var st = { name: 'blank', t: 0 };
   function go(n) { st.name = n; st.t = 0; }
@@ -768,11 +782,9 @@
     rope.alpha = 0;
 
     var dist = sticky.x - W * 0.5;
-    sticky.speedOverride = dist / 12;   // exactly 12 seconds to reach center
+    sticky.speedOverride = dist / 12;   // 12 seconds to center
     sticky.walkSpeed = sticky.speedOverride;
     sticky.targetX = W * 0.5;
-
-    go('dragIn');
   }
 
   function boom(x, y) {
@@ -818,7 +830,10 @@
         break;
 
       case 'leaveForBox':
-        if (speechDone(0.8) && sticky.x > W + 80 * scale) spawnBoxAndReturn();
+        if (speechDone(0.8) && sticky.x > W + 80 * scale) {
+          spawnBoxAndReturn();
+          go('dragIn');
+        }
         break;
 
       case 'dragIn':
@@ -842,7 +857,6 @@
         sticky.crouchTarget = 1;
         sticky.reachTarget = 1;
         sticky.reachPoint = boxReachPoint();
-
         if (st.t > 0.55) box.lidTarget = 1;
         if (st.t > 0.9 && !boomed) {
           boomed = true;
@@ -874,9 +888,7 @@
         }
         break;
 
-      case 'dragBox':
-        // waiting for the player to drag the box into the trash
-        break;
+      case 'dragBox': break;
 
       case 'inTrash':
         if (!box.visible) {
@@ -903,8 +915,8 @@
 
       case 'musicAsk':
         if (speechDone(1.0)) {
-          play(music1);
-          disco.on = true;
+          startMusic(audioState.m1);     // ← first music: play once, no loop
+          disco.on = true;               //    disco turns on with it
           trash.visible = false;
           sticky.targetX = W + 240 * scale;
           go('discoWait');
@@ -913,8 +925,11 @@
 
       case 'discoWait':
         if (st.t >= 10 && sticky.x > W + 80 * scale) {
+          // ✦ Sticky comes back with the second box → disco + music1 end here
+          fadeOutMusic(audioState.m1);
+          disco.on = false;
           spawnBoxAndReturn();
-          sticky.speedOverride = null;      // second box — normal speed
+          sticky.speedOverride = null;
           go('dragIn2');
         }
         break;
@@ -1005,8 +1020,8 @@
 
       case 'danceSay':
         if (speechDone(0.8)) {
-          play(music2);
-          disco.on = true;
+          startMusic(audioState.m2);     // ← second music: play once
+          disco.on = true;               //    disco returns for the dance
           sticky.dancing = true;
           buba.dancing = true;
           sticky.danceT = 0;
@@ -1018,7 +1033,8 @@
 
       case 'dance':
         if (st.t > 15) {
-          stop(music1); stop(music2);
+          // ✦ stop dancing → music + disco fade out together
+          fadeOutMusic(audioState.m2);
           disco.on = false;
           sticky.dancing = false;
           buba.dancing = false;
@@ -1186,23 +1202,18 @@
     ctx.lineWidth = Math.max(1.8, 2.2 * scale);
     ctx.lineJoin = 'round';
 
-    // body (trapezoid)
     ctx.beginPath();
     ctx.moveTo(x - w / 2 + w * 0.10, y - h * 0.86);
     ctx.lineTo(x + w / 2 - w * 0.10, y - h * 0.86);
     ctx.lineTo(x + w / 2 - w * 0.18, y);
     ctx.lineTo(x - w / 2 + w * 0.18, y);
     ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
+    ctx.fill(); ctx.stroke();
 
-    // lid
     ctx.beginPath();
     roundRect(x - w / 2, y - h, w, h * 0.16, h * 0.07);
-    ctx.fill();
-    ctx.stroke();
+    ctx.fill(); ctx.stroke();
 
-    // handle
     ctx.beginPath();
     ctx.moveTo(x - w * 0.13, y - h);
     ctx.lineTo(x - w * 0.13, y - h * 1.12);
@@ -1210,7 +1221,6 @@
     ctx.lineTo(x + w * 0.13, y - h);
     ctx.stroke();
 
-    // stripes
     ctx.globalAlpha = 0.45;
     ctx.beginPath();
     ctx.moveTo(x - w * 0.13, y - h * 0.72); ctx.lineTo(x - w * 0.17, y - h * 0.16);
@@ -1226,7 +1236,6 @@
     var left = box.x - box.w / 2;
     var top = box.y - box.h / 2;
 
-    // shadow
     ctx.save();
     ctx.globalAlpha = 0.07;
     ctx.fillStyle = '#000';
@@ -1243,10 +1252,8 @@
     ctx.fillStyle = fillColor();
 
     roundRect(0, 0, box.w, box.h, 4 * scale);
-    ctx.fill();
-    ctx.stroke();
+    ctx.fill(); ctx.stroke();
 
-    // lid hinged on the right
     var lidH = Math.max(5, 7 * scale);
     ctx.save();
     ctx.translate(box.w, 0);
@@ -1254,13 +1261,11 @@
     ctx.beginPath();
     roundRect(-box.w, -lidH, box.w, lidH, 3 * scale);
     ctx.globalAlpha = 0.92;
-    ctx.fill();
-    ctx.stroke();
+    ctx.fill(); ctx.stroke();
     ctx.restore();
 
     ctx.restore();
 
-    // "drag me" hint
     if (st.name === 'dragBox' && !drag.active) {
       var pulse = 0.5 + 0.5 * Math.sin(clock * 4);
       ctx.save();
@@ -1318,7 +1323,6 @@
     ctx.strokeStyle = fgColor();
     ctx.lineCap = 'round';
 
-    // eyes
     ctx.beginPath(); ctx.arc(-2.6, -1, 1.05, 0, Math.PI * 2); ctx.fill();
     ctx.beginPath(); ctx.arc(2.6, -1, 1.05, 0, Math.PI * 2); ctx.fill();
 
@@ -1365,7 +1369,6 @@
     var f = c.facing;
     var sc = scale;
 
-    // shadow
     ctx.save();
     var shadowAlpha = 0.085 * (1 - Math.min(1, -c.jumpY / (140 * sc)));
     ctx.globalAlpha = Math.max(0, shadowAlpha) * c.alpha;
@@ -1409,17 +1412,14 @@
       line(ankle, [ankle[0] + sy * 8, ankle[1] - sx * 8], w);
     }
 
-    // far side
     line(pose.hip, pose.legFar[0], baseW * 0.82);
     line(pose.legFar[0], pose.legFar[1], baseW * 0.82);
     drawFoot(pose.legFar, baseW * 0.82);
     line(pose.shoulder, pose.armFar.elbow, baseW * 0.82);
     line(pose.armFar.elbow, pose.armFar.hand, baseW * 0.82);
 
-    // torso
     line(pose.hip, pose.torsoTop, baseW);
 
-    // head
     var hc = P(pose.headC[0], pose.headC[1]);
     ctx.beginPath();
     ctx.ellipse(hc[0], hc[1], Math.abs(f) * CFG.headR * sc, CFG.headR * sc, 0, 0, Math.PI * 2);
@@ -1431,7 +1431,6 @@
 
     drawFace(c, hc, f, sc);
 
-    // near side
     line(pose.hip, pose.legNear[0], baseW);
     line(pose.legNear[0], pose.legNear[1], baseW);
     drawFoot(pose.legNear, baseW);
@@ -1559,7 +1558,6 @@
 
     drawDisco();
 
-    // screen shake
     if (shake > 0.3) {
       ctx.save();
       ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
@@ -1575,7 +1573,6 @@
 
     if (shake > 0.3) ctx.restore();
 
-    // flash
     if (flash > 0.01) {
       ctx.save();
       ctx.globalAlpha = Math.min(1, flash);
@@ -1586,7 +1583,6 @@
 
     drawSpeech();
 
-    // fade to black
     if (blackout > 0.001) {
       ctx.save();
       ctx.globalAlpha = blackout;
@@ -1668,6 +1664,7 @@
     updateBox(dt);
     updateParts(dt);
     updateDisco(dt);
+    updateMusic(dt);       // ← smooth volume fade in/out
 
     step(dt);
 
