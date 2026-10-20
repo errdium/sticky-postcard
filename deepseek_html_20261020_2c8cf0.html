@@ -1,0 +1,1691 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sticky & Buba</title>
+<!--
+  STICKY & BUBA — interactive story scene
+
+  Files you need to provide (put them in the SAME folder as this HTML):
+    - music.mp3   → disco background music (plays after the trash scene)
+    - music2.mp3  → dance music (plays when Buba says "let's all dance together!")
+
+  Both audio files are optional in the sense that the scene won't crash
+  if they're missing — but the disco/dance parts will be silent.
+
+  Controls:
+    - Mouse / touch drag: drag the smoking box into the trash can
+    - Keyboard: Tab to focus buttons, Enter to submit the name
+    - Escape: closes any open dialog
+-->
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%; overflow: hidden;
+    background: #ffffff;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #scene { position: fixed; inset: 0; display: block; width: 100%; height: 100%; }
+
+  /* ---------- Choices ---------- */
+  #choices {
+    position: fixed; display: none; flex-direction: row; flex-wrap: wrap;
+    justify-content: center; gap: 10px; transform: translateX(-50%);
+    z-index: 15; pointer-events: none;
+  }
+  .choice-btn {
+    pointer-events: auto; font: inherit; font-size: 15px; font-weight: 600;
+    padding: 11px 22px; min-height: 44px; border-radius: 999px;
+    border: 2px solid #111111; background: #ffffff; color: #111111;
+    cursor: pointer; box-shadow: 0 4px 14px rgba(0,0,0,0.10);
+    transition: background .15s, color .15s, transform .12s;
+    white-space: nowrap;
+  }
+  .choice-btn:hover { background: #111; color: #fff; }
+  .choice-btn:active { transform: scale(.96); }
+  .choice-btn:focus-visible { outline: 3px solid #e11d48; outline-offset: 3px; }
+
+  /* ---------- Name input ---------- */
+  #nameForm {
+    position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%);
+    display: none; align-items: center; gap: 10px;
+    background: #fff; border: 2px solid #111; border-radius: 999px;
+    padding: 8px 8px 8px 20px; z-index: 16;
+    box-shadow: 0 10px 30px rgba(0,0,0,.14);
+    max-width: 92vw;
+  }
+  #nameForm label { font-size: 14px; font-weight: 600; color: #111; white-space: nowrap; }
+  #nameInput {
+    font: inherit; font-size: 15px; padding: 8px 12px; border-radius: 999px;
+    border: 2px solid #111; outline: none; width: 150px; min-width: 80px;
+    background: #fff; color: #111;
+  }
+  #nameInput:focus-visible { outline: 3px solid #e11d48; outline-offset: 2px; }
+  #nameForm button {
+    font: inherit; font-size: 15px; font-weight: 700; padding: 9px 18px;
+    border-radius: 999px; border: 2px solid #111; background: #111; color: #fff;
+    cursor: pointer;
+  }
+  #nameForm button:hover { background: #e11d48; border-color: #e11d48; }
+
+  @media (max-width: 420px) {
+    #nameInput { width: 100px; }
+    #nameForm { padding: 6px 6px 6px 14px; gap: 8px; }
+    #nameForm label { font-size: 13px; }
+    #nameForm button { padding: 8px 14px; font-size: 14px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .choice-btn, #nameForm { transition-duration: .01ms !important; }
+  }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<div id="choices"></div>
+
+<form id="nameForm" autocomplete="off">
+  <label for="nameInput">Your name:</label>
+  <input id="nameInput" type="text" maxlength="24" placeholder="Name" autocomplete="off">
+  <button type="submit">OK</button>
+</form>
+
+<script>
+(function () {
+  'use strict';
+
+  /* ============================================================
+     CONFIG
+     ============================================================ */
+  var CFG = {
+    thigh: 27, shin: 27, torso: 44, headR: 9,
+    upperArm: 21, foreArm: 19, hipHeight: 44,
+    stride: 46, stepH: 13, stance: 0.62
+  };
+  var reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var TYPING_SPEED = 46;   // characters per second
+
+  /* ============================================================
+     CANVAS
+     ============================================================ */
+  var cv = document.getElementById('scene');
+  var ctx = cv.getContext('2d');
+  var W = 0, H = 0, scale = 1, dpr = 1, groundY = 0;
+
+  function resize() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    W = window.innerWidth; H = window.innerHeight;
+    cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+    cv.style.width = W + 'px'; cv.style.height = H + 'px';
+    scale = Math.max(0.68, Math.min(1.5, Math.min(W, H) / 640));
+    groundY = H * 0.80;
+    layoutTrash();
+  }
+
+  /* ============================================================
+     CHARACTERS
+     ============================================================ */
+  function makeChar() {
+    return {
+      x: 0, facing: -1, phase: 0, walkSpeed: 0, targetX: null,
+      idleMix: 1, crouch: 0, crouchTarget: 0,
+      reach: 0, reachTarget: 0, reachPoint: [0, 0],
+      pull: 0, pullTarget: 0,
+      emotion: 'neutral', visible: false, alpha: 1, speedOverride: null,
+      turning: false, turnT: 0, turnFrom: 1, turnTo: 1,
+      jumpY: 0, rotation: 0, tuck: 0, armsUp: 0,
+      danceT: 0, dancing: false, danceOffset: 0,
+      flight: null, riseOffset: 0
+    };
+  }
+
+  var sticky = makeChar();
+  var buba = makeChar();
+  buba.danceOffset = 0.7;
+
+  /* ============================================================
+     CLOCK
+     ============================================================ */
+  var clock = 0;
+
+  /* ============================================================
+     GEOMETRY / IK
+     ============================================================ */
+  function lerp(a, b, t) { return a + (b - a) * t; }
+  function lerpPt(a, b, t) { return [lerp(a[0], b[0], t), lerp(a[1], b[1], t)]; }
+  function easeInOut(t) { return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2; }
+  function clamp(v, a, b) { return Math.min(b, Math.max(a, v)); }
+
+  function solveIK(root, end, l1, l2, bendDir) {
+    var dx = end[0] - root[0], dy = end[1] - root[1];
+    var d = Math.sqrt(dx * dx + dy * dy) || 1e-6;
+    var ux = dx / d, uy = dy / d;
+    var dmin = Math.abs(l1 - l2) + 0.01;
+    var dmax = l1 + l2 - 0.01;
+    var dc = clamp(d, dmin, dmax);
+    var a = (l1 * l1 - l2 * l2 + dc * dc) / (2 * dc);
+    var h = Math.sqrt(Math.max(0, l1 * l1 - a * a));
+    var bx = root[0] + ux * a, by = root[1] + uy * a;
+    return [
+      [bx + uy * bendDir * h, by - ux * bendDir * h],
+      [root[0] + ux * dc, root[1] + uy * dc]
+    ];
+  }
+
+  function footTarget(ph) {
+    ph = ((ph % 1) + 1) % 1;
+    var sr = CFG.stance;
+    if (ph < sr) {
+      var t = ph / sr;
+      return [CFG.stride * 0.5 - CFG.stride * t, 0];
+    }
+    var u = (ph - sr) / (1 - sr);
+    var e = u * u * (3 - 2 * u);
+    return [-CFG.stride * 0.5 + CFG.stride * e, -CFG.stepH * Math.sin(Math.PI * u)];
+  }
+
+  function armPts(shoulder, angle, idle) {
+    var k = clamp(angle / 0.42, -1, 1);
+    var bendWalk = 0.30 + 0.55 * (0.5 + 0.5 * k);
+    var bend = bendWalk * (1 - idle) + 0.16 * idle;
+    var elbow = [shoulder[0] + Math.sin(angle) * CFG.upperArm,
+                 shoulder[1] + Math.cos(angle) * CFG.upperArm];
+    var hand = [elbow[0] + Math.sin(angle + bend) * CFG.foreArm,
+                elbow[1] + Math.cos(angle + bend) * CFG.foreArm];
+    return { elbow: elbow, hand: hand };
+  }
+
+  function getPose(c) {
+    var p = c.phase, idle = c.idleMix;
+
+    var walkBob = 1.5 * Math.cos(4 * Math.PI * p);
+    var walkHipY = -CFG.hipHeight + walkBob;
+    var footWnear = footTarget(p);
+    var footWfar = footTarget(p + 0.5);
+    var armWnear = -0.42 * Math.cos(2 * Math.PI * p);
+    var armWfar = 0.42 * Math.cos(2 * Math.PI * p);
+
+    var idleHipY = -CFG.hipHeight;
+    var footInear = [6, 0], footIfar = [-6, 0];
+    var armInear = 0.05, armIfar = -0.05;
+
+    var hipY = lerp(walkHipY, idleHipY, idle);
+    var footNear = lerpPt(footWnear, footInear, idle);
+    var footFar = lerpPt(footWfar, footIfar, idle);
+    var armNearA = lerp(armWnear, armInear, idle);
+    var armFarA = lerp(armWfar, armIfar, idle);
+
+    // crouch
+    hipY = lerp(hipY, -17, c.crouch);
+    footNear = lerpPt(footNear, [9, 0], c.crouch);
+    footFar = lerpPt(footFar, [-9, 0], c.crouch);
+
+    // tucked legs (jump)
+    if (c.tuck > 0.001) {
+      footNear = lerpPt(footNear, [7, -16], c.tuck);
+      footFar = lerpPt(footFar, [-7, -16], c.tuck);
+    }
+
+    var hip = [0, hipY];
+    var lean = lerp(lerp(3, 1, idle), 16, c.crouch);
+    lean = lerp(lean, -9, c.pull);
+
+    var torsoTop = [hip[0] + lean, hip[1] - CFG.torso];
+    var shoulder = [torsoTop[0], torsoTop[1] + 3.5];
+    var headC = [torsoTop[0] + 1.3, torsoTop[1] - CFG.headR - 2.5];
+
+    var legNear = solveIK(hip, footNear, CFG.thigh, CFG.shin, 1);
+    var legFar = solveIK(hip, footFar, CFG.thigh, CFG.shin, 1);
+
+    var nearA = lerp(armNearA, 2.55, c.armsUp);
+    var farA = lerp(armFarA, 2.95, c.armsUp);
+    var armNear = armPts(shoulder, nearA, idle);
+    var armFar = armPts(shoulder, farA, idle);
+
+    // arms reaching for box
+    if (c.reach > 0.001) {
+      var ikN = solveIK(shoulder, c.reachPoint, CFG.upperArm, CFG.foreArm, 1);
+      var ikF = solveIK(shoulder, [c.reachPoint[0] - 8, c.reachPoint[1] + 2], CFG.upperArm, CFG.foreArm, 1);
+      armNear = { elbow: lerpPt(armNear.elbow, ikN[0], c.reach), hand: lerpPt(armNear.hand, ikN[1], c.reach) };
+      armFar = { elbow: lerpPt(armFar.elbow, ikF[0], c.reach), hand: lerpPt(armFar.hand, ikF[1], c.reach) };
+    }
+
+    return {
+      hip: hip, torsoTop: torsoTop, shoulder: shoulder, headC: headC,
+      legNear: legNear, legFar: legFar, armNear: armNear, armFar: armFar
+    };
+  }
+
+  /* ============================================================
+     CHARACTER UPDATE
+     ============================================================ */
+  function updateChar(c, dt) {
+    // ---- flight after explosion ----
+    if (c.flight) {
+      var f = c.flight;
+      f.t += dt;
+      var u = Math.min(1, f.t / f.T);
+      c.x = lerp(f.x0, f.x1, u);
+      c.jumpY = -4 * f.h * u * (1 - u);
+      c.rotation = -Math.PI * 2 * u;
+      if (u >= 1) {
+        c.flight = null;
+        c.jumpY = 0;
+        c.rotation = 0;
+        c.x = f.x1;
+        c.emotion = 'surprised';
+      }
+      return;
+    }
+
+    // ---- dance ----
+    if (c.dancing) {
+      c.danceT += dt;
+      var cycle = 1.45;
+      var idx = Math.floor(c.danceT / cycle);
+      var lt = (c.danceT % cycle) / cycle;
+      var type = (idx + Math.round(c.danceOffset * 7)) % 3;
+      var jump = Math.sin(Math.PI * lt);
+
+      if (type === 0) {                       // jump with arms up
+        c.jumpY = -jump * 58 * scale;
+        c.rotation = 0;
+        c.armsUp = Math.min(1, jump * 1.4);
+        c.tuck = jump * 0.55;
+      } else if (type === 1) {                // backflip
+        c.jumpY = -jump * 105 * scale;
+        c.rotation = -Math.PI * 2 * lt;
+        c.armsUp = 0.25 * jump;
+        c.tuck = 0.85 * jump;
+      } else {                                // frontflip
+        c.jumpY = -jump * 88 * scale;
+        c.rotation = Math.PI * 2 * lt;
+        c.armsUp = 0.15 * jump;
+        c.tuck = 0.7 * jump;
+      }
+      c.idleMix += (0 - c.idleMix) * Math.min(1, dt * 8);
+      return;
+    } else {
+      var k = Math.min(1, dt * 9);
+      c.jumpY += (0 - c.jumpY) * k;
+      c.tuck += (0 - c.tuck) * k;
+      c.armsUp += (0 - c.armsUp) * k;
+      if (Math.abs(c.rotation) > 0.001) {
+        var norm = ((c.rotation % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+        if (norm > Math.PI) norm -= Math.PI * 2;
+        c.rotation = norm * Math.pow(0.0005, dt);
+        if (Math.abs(c.rotation) < 0.01) c.rotation = 0;
+      }
+    }
+
+    // ---- crouch / pull ----
+    c.crouch += (c.crouchTarget - c.crouch) * Math.min(1, dt * 7);
+    c.reach += (c.reachTarget - c.reach) * Math.min(1, dt * 9);
+    c.pull += (c.pullTarget - c.pull) * Math.min(1, dt * 3);
+
+    // ---- turning around ----
+    if (c.turning) {
+      c.turnT += dt / 0.32;
+      if (c.turnT >= 1) {
+        c.turning = false;
+        c.facing = c.turnTo;
+      } else {
+        c.facing = c.turnFrom * Math.cos(c.turnT * Math.PI);
+        if (Math.abs(c.facing) < 0.08) c.facing = c.facing < 0 ? -0.08 : 0.08;
+      }
+      c.walkSpeed += (0 - c.walkSpeed) * Math.min(1, dt * 9);
+      return;
+    }
+
+    var targetIdle = (c.targetX === null && c.walkSpeed < 10) ? 1 : 0;
+    c.idleMix += (targetIdle - c.idleMix) * Math.min(1, dt * 8);
+
+    if (c.targetX === null) {
+      c.walkSpeed += (0 - c.walkSpeed) * Math.min(1, dt * 8);
+      return;
+    }
+
+    var dx = c.targetX - c.x;
+    var dist = Math.abs(dx);
+    if (dist < 1.5) { c.x = c.targetX; c.targetX = null; c.walkSpeed = 0; return; }
+
+    var wantDir = Math.sign(dx) || c.facing;
+    if (wantDir !== Math.sign(c.facing) && Math.abs(c.facing) > 0.2) {
+      c.turning = true; c.turnT = 0; c.turnFrom = c.facing; c.turnTo = wantDir;
+      return;
+    }
+    c.facing = wantDir;
+
+    var desired = (c.speedOverride != null)
+      ? c.speedOverride
+      : Math.min(165, Math.max(80, 108 * scale)) * Math.min(1, dist / (45 * scale));
+
+    c.walkSpeed += (desired - c.walkSpeed) * Math.min(1, dt * 9);
+    c.x += c.walkSpeed * wantDir * dt;
+
+    var cycleTime = (CFG.stride * scale) / (CFG.stance * Math.max(c.walkSpeed, 0.5));
+    c.phase += dt / cycleTime;
+    c.phase %= 1;
+
+    if (Math.abs(c.x - c.targetX) < 1.5) { c.x = c.targetX; c.targetX = null; c.walkSpeed = 0; }
+  }
+
+  /* ============================================================
+     BOX
+     ============================================================ */
+  var box = {
+    x: 0, y: 0, vx: 0,
+    w: 52, h: 42,
+    lidOpen: 0, lidTarget: 0,
+    visible: false, attached: false,
+    smoking: false, smokeAcc: 0, smokeLife: 0,
+    animTrash: null
+  };
+  var rope = { ax: 0, ay: 0, init: false, alpha: 0 };
+
+  function sizeBox() {
+    box.w = 52 * scale;
+    box.h = 42 * scale;
+  }
+
+  function updateBox(dt) {
+    box.lidOpen += (box.lidTarget - box.lidOpen) * Math.min(1, dt * 7);
+
+    if (!box.visible) return;
+
+    // animation into trash
+    if (box.animTrash) {
+      var a = box.animTrash;
+      a.t += dt / 0.5;
+      var u = Math.min(1, a.t);
+      box.x = lerp(a.x0, trash.x, u);
+      box.y = lerp(a.y0, trash.y - trash.h * 0.55, u);
+      box.w = lerp(a.w0, box.w * 0.4, u);
+      if (u >= 1) { box.visible = false; box.animTrash = null; }
+      return;
+    }
+
+    // fall to the ground (after drag)
+    if (!box.attached) {
+      var gy = groundY - box.h / 2;
+      if (box.y < gy) box.y += (gy - box.y) * Math.min(1, dt * 12);
+      else box.y = gy;
+    }
+
+    // rope
+    if (box.attached && sticky.visible) {
+      var pose = getPose(sticky);
+      var hipY = groundY + pose.hip[1] * scale;
+      var behind = -sticky.facing;
+      var ax = sticky.x + 8 * scale * behind;
+      var ay = hipY + 4 * scale;
+
+      if (!rope.init) { rope.ax = ax; rope.ay = ay; rope.init = true; }
+      else {
+        rope.ax += (ax - rope.ax) * Math.min(1, dt * 20);
+        rope.ay += (ay - rope.ay) * Math.min(1, dt * 20);
+      }
+      rope.alpha += (1 - rope.alpha) * Math.min(1, dt * 8);
+
+      var ropeLen = 54 * scale;
+      var tautX = rope.ax + ropeLen * behind;
+      var excess = (box.x - tautX) * behind;
+
+      if (excess > 0) box.vx += (tautX - box.x) * 26 * dt;
+
+      box.vx *= Math.pow(0.08, dt);
+      if (Math.abs(box.vx) < 0.3) box.vx = 0;
+      box.x += box.vx * dt;
+
+      // box must not roll over the stickman
+      var minGap = 32 * scale + box.w / 2;
+      if (behind > 0 && box.x < sticky.x + minGap) { box.x = sticky.x + minGap; if (box.vx < 0) box.vx = 0; }
+      if (behind < 0 && box.x > sticky.x - minGap) { box.x = sticky.x - minGap; if (box.vx > 0) box.vx = 0; }
+
+      box.y = groundY - box.h / 2;
+    } else {
+      rope.alpha += (0 - rope.alpha) * Math.min(1, dt * 6);
+    }
+
+    // smoke
+    if (box.smoking) {
+      box.smokeLife += dt;
+      var rate = Math.max(2.5, 14 - box.smokeLife * 0.9);
+      box.smokeAcc += dt * rate;
+      while (box.smokeAcc >= 1) {
+        box.smokeAcc -= 1;
+        spawnSmoke(
+          box.x + (Math.random() - 0.5) * box.w * 0.7,
+          box.y - box.h * 0.45
+        );
+      }
+    }
+  }
+
+  function boxReachPoint() {
+    var tx = box.x - box.w * 0.25;
+    var ty = box.y - box.h * 0.35;
+    return [(tx - sticky.x) / (sticky.facing * scale), (ty - groundY) / scale];
+  }
+
+  /* ============================================================
+     PARTICLES
+     ============================================================ */
+  var parts = [];
+
+  function spawnSmoke(x, y) {
+    if (parts.length > 320) return;
+    parts.push({
+      x: x, y: y,
+      vx: (Math.random() - 0.5) * 14 * scale,
+      vy: -(14 + Math.random() * 24) * scale,
+      g: -6 * scale,
+      r: (4 + Math.random() * 7) * scale,
+      grow: 16 * scale,
+      life: 1.5 + Math.random() * 1.8,
+      max: 3.3,
+      col: '150,150,155',
+      alphaMax: 0.30 + Math.random() * 0.22
+    });
+  }
+
+  function spawnExplosion(x, y) {
+    var colors = ['255,183,3', '251,133,0', '230,57,70', '255,236,140', '120,110,105'];
+    for (var i = 0; i < 90; i++) {
+      var ang = Math.random() * Math.PI * 2;
+      var spd = (60 + Math.random() * 460) * scale;
+      parts.push({
+        x: x, y: y,
+        vx: Math.cos(ang) * spd,
+        vy: Math.sin(ang) * spd - 80 * scale,
+        g: 1300 * scale,
+        r: (1.5 + Math.random() * 4.5) * scale,
+        grow: -1 * scale,
+        life: 0.5 + Math.random() * 0.9,
+        max: 1.4,
+        col: colors[(Math.random() * colors.length) | 0],
+        alphaMax: 0.95
+      });
+    }
+    for (var j = 0; j < 26; j++) {
+      var a2 = Math.random() * Math.PI * 2;
+      var s2 = (20 + Math.random() * 150) * scale;
+      parts.push({
+        x: x, y: y,
+        vx: Math.cos(a2) * s2,
+        vy: Math.sin(a2) * s2 - 30 * scale,
+        g: -14 * scale,
+        r: (8 + Math.random() * 14) * scale,
+        grow: 24 * scale,
+        life: 1.6 + Math.random() * 1.6,
+        max: 3.2,
+        col: '90,88,86',
+        alphaMax: 0.42
+      });
+    }
+  }
+
+  function updateParts(dt) {
+    for (var i = parts.length - 1; i >= 0; i--) {
+      var p = parts[i];
+      p.life -= dt;
+      if (p.life <= 0) { parts.splice(i, 1); continue; }
+      p.vy += p.g * dt;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.vx *= Math.pow(0.5, dt);
+      p.r += p.grow * dt;
+      if (p.r < 0.4) p.r = 0.4;
+    }
+  }
+
+  /* ============================================================
+     TRASH CAN
+     ============================================================ */
+  var trash = { visible: false, x: 0, y: 0, w: 42, h: 54, pop: 0 };
+
+  function layoutTrash() {
+    trash.x = W - 72 * scale;
+    trash.y = groundY - 2;
+    trash.w = 42 * scale;
+    trash.h = 54 * scale;
+  }
+
+  /* ============================================================
+     DISCO
+     ============================================================ */
+  var disco = { on: false, intensity: 0, t: 0 };
+
+  function updateDisco(dt) {
+    disco.t += dt;
+    var target = disco.on ? 1 : 0;
+    disco.intensity += (target - disco.intensity) * Math.min(1, dt * 2.2);
+  }
+
+  /* ============================================================
+     SPEECH
+     ============================================================ */
+  var speech = {
+    visible: false, char: null, text: '', shown: 0,
+    typed: false, anim: 0, finishedAt: null,
+    pending: null, choices: null, rect: null
+  };
+
+  var choicesEl = document.getElementById('choices');
+
+  function setChoices(list) {
+    choicesEl.innerHTML = '';
+    if (!list || !list.length) { choicesEl.style.display = 'none'; return; }
+    list.forEach(function (ch) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'choice-btn';
+      b.textContent = ch.label;
+      b.addEventListener('click', function () {
+        setChoices(null);
+        speech.choices = null;
+        ch.cb();
+      });
+      choicesEl.appendChild(b);
+    });
+    choicesEl.style.display = 'flex';
+  }
+
+  function say(c, text, choices) {
+    speech.visible = true;
+    speech.char = c;
+    speech.text = text;
+    speech.shown = 0;
+    speech.typed = false;
+    speech.anim = 0;
+    speech.finishedAt = null;
+    speech.pending = choices || null;
+    speech.choices = null;
+    setChoices(null);
+  }
+
+  function hideSpeech() {
+    speech.visible = false;
+    speech.pending = null;
+    speech.choices = null;
+    setChoices(null);
+  }
+
+  function updateSpeech(dt) {
+    if (!speech.visible) return;
+    speech.anim = Math.min(1, speech.anim + dt * 7);
+    if (!speech.typed) {
+      speech.shown += dt * TYPING_SPEED;
+      if (speech.shown >= speech.text.length) {
+        speech.shown = speech.text.length;
+        speech.typed = true;
+        speech.finishedAt = clock;
+        if (speech.pending) { speech.choices = speech.pending; setChoices(speech.choices); }
+      }
+    }
+  }
+
+  function speechDone(pause) {
+    return speech.finishedAt !== null && (clock - speech.finishedAt) >= pause;
+  }
+
+  cv.addEventListener('pointerdown', function () {
+    if (speech.visible && !speech.typed) {
+      speech.shown = speech.text.length;
+      speech.typed = true;
+      speech.finishedAt = clock;
+      if (speech.pending) { speech.choices = speech.pending; setChoices(speech.choices); }
+    }
+  });
+
+  /* ============================================================
+     NAME INPUT
+     ============================================================ */
+  var nameForm = document.getElementById('nameForm');
+  var nameInput = document.getElementById('nameInput');
+  var userName = '';
+  var nameResolve = null;
+
+  nameForm.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var v = nameInput.value.trim();
+    if (!v) return;
+    userName = v.slice(0, 24);
+    nameForm.style.display = 'none';
+    nameInput.blur();
+    if (nameResolve) { var r = nameResolve; nameResolve = null; r(); }
+  });
+
+  function askName(cb) {
+    nameResolve = cb;
+    nameForm.style.display = 'flex';
+    nameInput.value = '';
+    setTimeout(function () { nameInput.focus({ preventScroll: true }); }, 60);
+  }
+
+  /* ============================================================
+     AUDIO
+     ============================================================ */
+  var music1 = new Audio('music.mp3');   // disco background
+  music1.loop = true; music1.volume = 0.45;
+  var music2 = new Audio('music2.mp3');  // dance music
+  music2.loop = true; music2.volume = 0.45;
+  [music1, music2].forEach(function (a) {
+    a.addEventListener('error', function () {});
+  });
+
+  function play(a) {
+    try { a.currentTime = 0; var p = a.play(); if (p && p.catch) p.catch(function () {}); } catch (e) {}
+  }
+  function stop(a) { try { a.pause(); a.currentTime = 0; } catch (e) {} }
+
+  /* ============================================================
+     STORY
+     ============================================================ */
+  var st = { name: 'blank', t: 0 };
+  function go(n) { st.name = n; st.t = 0; }
+
+  var shake = 0, flash = 0, blackout = 0, boomed = false;
+
+  function start() {
+    sticky.visible = true;
+    sticky.x = W + 60 * scale;
+    sticky.facing = -1;
+    sticky.phase = 0;
+    sticky.walkSpeed = 0;
+    sticky.idleMix = 0;
+    sticky.emotion = 'neutral';
+    sticky.targetX = W * 0.5;
+    sticky.speedOverride = null;
+    go('enter1');
+  }
+
+  function askHow() {
+    sticky.emotion = 'happy';
+    say(sticky, 'how are u doing bro?', [
+      { label: 'not bad', cb: function () {
+          sticky.emotion = 'happy';
+          say(sticky, "ayy that's what's up bro, glad to hear it!", null);
+          go('reply1');
+      }},
+      { label: 'tired', cb: function () {
+          sticky.emotion = 'sad';
+          say(sticky, "aw that sucks bro, take it easy. maybe this'll cheer u up", null);
+          go('reply1');
+      }}
+    ]);
+    go('wait1');
+  }
+
+  function askGift() {
+    sticky.emotion = 'happy';
+    say(sticky, 'do u want a gift, its special for u btw', [
+      { label: 'ok', cb: giftOk },
+      { label: 'nah', cb: giftNah }
+    ]);
+    go('wait2');
+  }
+
+  function giftNah() {
+    sticky.emotion = 'neutral';
+    say(sticky, 'alright, see u later homie', null);
+    sticky.targetX = W + 240 * scale;
+    go('leaveNoGift');
+  }
+
+  function giftOk() {
+    sticky.emotion = 'happy';
+    say(sticky, "bet! wait here, I'll go get it", null);
+    sticky.targetX = W + 240 * scale;
+    go('leaveForBox');
+  }
+
+  function spawnBoxAndReturn() {
+    sizeBox();
+    sticky.x = W + 70 * scale;
+    sticky.facing = -1;
+    sticky.turning = false;
+    sticky.emotion = 'neutral';
+    sticky.phase = 0;
+    sticky.walkSpeed = 0;
+    sticky.idleMix = 0;
+    sticky.pull = 0;
+    sticky.pullTarget = 1;
+
+    box.visible = true;
+    box.attached = true;
+    box.smoking = false;
+    box.smokeLife = 0;
+    box.x = sticky.x + 70 * scale;
+    box.y = groundY - box.h / 2;
+    box.vx = 0;
+    box.lidOpen = 0;
+    box.lidTarget = 0;
+    box.animTrash = null;
+    rope.init = false;
+    rope.alpha = 0;
+
+    var dist = sticky.x - W * 0.5;
+    sticky.speedOverride = dist / 12;   // exactly 12 seconds to reach center
+    sticky.walkSpeed = sticky.speedOverride;
+    sticky.targetX = W * 0.5;
+
+    go('dragIn');
+  }
+
+  function boom(x, y) {
+    spawnExplosion(x, y);
+    shake = 26 * scale;
+    flash = 1;
+    box.attached = false;
+    box.smoking = true;
+    box.smokeLife = 0;
+    rope.alpha = 0;
+
+    var x0 = sticky.x;
+    var x1 = Math.max(70 * scale, W * 0.5 - 330 * scale);
+    sticky.flight = { t: 0, T: 0.85, x0: x0, x1: x1, h: 115 * scale };
+    sticky.emotion = 'surprised';
+    hideSpeech();
+  }
+
+  /* ---------- story steps ---------- */
+  function step(dt) {
+    st.t += dt;
+
+    switch (st.name) {
+
+      case 'blank':
+        if (st.t >= 2) start();
+        break;
+
+      case 'enter1':
+        if (sticky.targetX === null && sticky.walkSpeed < 5 && !sticky.turning) askHow();
+        break;
+
+      case 'wait1': break;
+
+      case 'reply1':
+        if (speechDone(1.2)) askGift();
+        break;
+
+      case 'wait2': break;
+
+      case 'leaveNoGift':
+        if (speechDone(1.0) && sticky.x > W + 80 * scale) go('fade1');
+        break;
+
+      case 'leaveForBox':
+        if (speechDone(0.8) && sticky.x > W + 80 * scale) spawnBoxAndReturn();
+        break;
+
+      case 'dragIn':
+        if (sticky.targetX === null && !sticky.turning) {
+          sticky.pullTarget = 0;
+          sticky.emotion = 'surprised';
+          say(sticky, "holy shit, it's heavy", null);
+          go('heavySay');
+        }
+        break;
+
+      case 'heavySay':
+        if (speechDone(1.2)) { say(sticky, 'im opening bruh', null); go('openingSay'); }
+        break;
+
+      case 'openingSay':
+        if (speechDone(0.7)) { boomed = false; go('opening'); }
+        break;
+
+      case 'opening':
+        sticky.crouchTarget = 1;
+        sticky.reachTarget = 1;
+        sticky.reachPoint = boxReachPoint();
+
+        if (st.t > 0.55) box.lidTarget = 1;
+        if (st.t > 0.9 && !boomed) {
+          boomed = true;
+          boom(box.x, box.y - box.h * 0.35);
+          go('flying');
+        }
+        break;
+
+      case 'flying':
+        if (!sticky.flight) {
+          sticky.crouchTarget = 0;
+          sticky.reachTarget = 0;
+          sticky.emotion = 'surprised';
+          say(sticky, 'who the fuck did this?', null);
+          go('whoSay');
+        }
+        break;
+
+      case 'whoSay':
+        if (speechDone(1.6)) { say(sticky, 'remove the box for me, bro', null); go('removeSay'); }
+        break;
+
+      case 'removeSay':
+        if (speechDone(0.8)) {
+          layoutTrash();
+          trash.visible = true;
+          trash.pop = 0;
+          go('dragBox');
+        }
+        break;
+
+      case 'dragBox':
+        // waiting for the player to drag the box into the trash
+        break;
+
+      case 'inTrash':
+        if (!box.visible) {
+          box.smoking = false;
+          sticky.emotion = 'happy';
+          say(sticky, 'ty bro ❤️', null);
+          go('thanks1');
+        }
+        break;
+
+      case 'thanks1':
+        if (speechDone(1.2)) {
+          say(sticky, "I'll bring you another one right now, that one was for me tho)", null);
+          go('thanks2');
+        }
+        break;
+
+      case 'thanks2':
+        if (speechDone(1.6)) {
+          say(sticky, "I'll put on some music so u don't get bored, ok ?", null);
+          go('musicAsk');
+        }
+        break;
+
+      case 'musicAsk':
+        if (speechDone(1.0)) {
+          play(music1);
+          disco.on = true;
+          trash.visible = false;
+          sticky.targetX = W + 240 * scale;
+          go('discoWait');
+        }
+        break;
+
+      case 'discoWait':
+        if (st.t >= 10 && sticky.x > W + 80 * scale) {
+          spawnBoxAndReturn();
+          sticky.speedOverride = null;      // second box — normal speed
+          go('dragIn2');
+        }
+        break;
+
+      case 'dragIn2':
+        if (sticky.targetX === null && !sticky.turning) {
+          sticky.pullTarget = 0;
+          sticky.emotion = 'happy';
+          say(sticky, 'here it is! watch this', null);
+          go('watchSay');
+        }
+        break;
+
+      case 'watchSay':
+        if (speechDone(1.0)) go('opening2');
+        break;
+
+      case 'opening2':
+        sticky.crouchTarget = 1;
+        sticky.reachTarget = 1;
+        sticky.reachPoint = boxReachPoint();
+        if (st.t > 0.55) box.lidTarget = 1;
+
+        if (st.t > 1.15 && !buba.visible) {
+          buba.visible = true;
+          buba.alpha = 0;
+          buba.x = box.x + 46 * scale;
+          buba.facing = -1;
+          buba.emotion = 'surprised';
+          buba.riseOffset = box.h * 1.1;
+          buba.idleMix = 1;
+        }
+        if (buba.visible) {
+          buba.riseOffset += (0 - buba.riseOffset) * Math.min(1, dt * 4.5);
+          buba.alpha += (1 - buba.alpha) * Math.min(1, dt * 6);
+        }
+        if (st.t > 2.4) {
+          sticky.crouchTarget = 0;
+          sticky.reachTarget = 0;
+          sticky.emotion = 'neutral';
+          buba.emotion = 'surprised';
+          say(buba, 'oh shit, where am i? fuck, who are u?!', null);
+          go('bubaSay1');
+        }
+        break;
+
+      case 'bubaSay1':
+        if (speechDone(1.5)) {
+          sticky.emotion = 'happy';
+          say(sticky, "im sticky, and who are you?", null);
+          go('stickySay1');
+        }
+        break;
+
+      case 'stickySay1':
+        if (speechDone(1.2)) {
+          buba.emotion = 'neutral';
+          say(buba, 'im buba', null);
+          go('bubaSay2');
+        }
+        break;
+
+      case 'bubaSay2':
+        if (speechDone(1.2)) {
+          buba.emotion = 'surprised';
+          say(buba, 'so who are u?', null);
+          go('askName');
+        }
+        break;
+
+      case 'askName':
+        if (speechDone(0.4) && !nameResolve) {
+          askName(function () {
+            buba.emotion = 'happy';
+            say(buba, 'nice to meet you, ' + userName + '!', null);
+            go('meetSay');
+          });
+        }
+        break;
+
+      case 'meetSay':
+        if (speechDone(1.2)) {
+          buba.emotion = 'happy';
+          say(buba, "let's all dance together!", null);
+          go('danceSay');
+        }
+        break;
+
+      case 'danceSay':
+        if (speechDone(0.8)) {
+          play(music2);
+          disco.on = true;
+          sticky.dancing = true;
+          buba.dancing = true;
+          sticky.danceT = 0;
+          buba.danceT = 0.6;
+          hideSpeech();
+          go('dance');
+        }
+        break;
+
+      case 'dance':
+        if (st.t > 15) {
+          stop(music1); stop(music2);
+          disco.on = false;
+          sticky.dancing = false;
+          buba.dancing = false;
+          sticky.emotion = 'neutral';
+          buba.emotion = 'neutral';
+          go('end1');
+        }
+        break;
+
+      case 'end1':
+        if (st.t > 0.6) {
+          sticky.emotion = 'sad';
+          say(sticky, 'I need to go now', null);
+          go('end2');
+        }
+        break;
+
+      case 'end2':
+        if (speechDone(1.0)) {
+          buba.emotion = 'neutral';
+          say(buba, 'yeah, me too', null);
+          go('end3');
+        }
+        break;
+
+      case 'end3':
+        if (speechDone(1.0)) {
+          sticky.emotion = 'happy';
+          say(sticky, "so the gift didn't really work out today, but I think I still cheered u up tho)", null);
+          go('end4');
+        }
+        break;
+
+      case 'end4':
+        if (speechDone(1.6)) {
+          hideSpeech();
+          sticky.emotion = 'neutral';
+          buba.emotion = 'neutral';
+          sticky.targetX = W + 260 * scale;
+          buba.targetX = W + 320 * scale;
+          go('finalWalk');
+        }
+        break;
+
+      case 'finalWalk':
+        if (sticky.x > W + 120 * scale && buba.x > W + 120 * scale) go('fade1');
+        break;
+
+      case 'fade1':
+        blackout = Math.min(1, blackout + dt / 2.6);
+        if (blackout >= 1) go('end');
+        break;
+
+      case 'end': break;
+    }
+  }
+
+  /* ============================================================
+     RENDERING
+     ============================================================ */
+  function fgColor() {
+    var t = disco.intensity;
+    var v = Math.round(17 + (255 - 17) * t);
+    return 'rgb(' + v + ',' + v + ',' + v + ')';
+  }
+  function fillColor() {
+    var t = disco.intensity;
+    var v = Math.round(255 + (18 - 255) * t);
+    return 'rgb(' + v + ',' + v + ',' + v + ')';
+  }
+
+  function roundRect(x, y, w, h, r) {
+    r = Math.min(r, w / 2, h / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+  }
+
+  function drawDisco() {
+    var a = disco.intensity;
+    if (a < 0.01) return;
+    ctx.save();
+    ctx.globalAlpha = a;
+
+    var g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, '#0d0618');
+    g.addColorStop(0.6, '#1a0b2e');
+    g.addColorStop(1, '#2b0f47');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+
+    var srcX = W * 0.5, srcY = -H * 0.15;
+    var R = Math.max(W, H) * 1.6;
+    var n = 10;
+    for (var i = 0; i < n; i++) {
+      var a0 = (i / n) * Math.PI * 2 + disco.t * 0.55;
+      var a1 = a0 + (Math.PI * 2 / n) * 0.55;
+      var hue = (i * 36 + disco.t * 60) % 360;
+      var grad = ctx.createRadialGradient(srcX, srcY, 0, srcX, srcY, R);
+      grad.addColorStop(0, 'hsla(' + hue + ',95%,65%,0.42)');
+      grad.addColorStop(0.5, 'hsla(' + hue + ',95%,60%,0.11)');
+      grad.addColorStop(1, 'hsla(' + hue + ',95%,60%,0)');
+      ctx.beginPath();
+      ctx.moveTo(srcX, srcY);
+      ctx.lineTo(srcX + Math.cos(a0) * R, srcY + Math.sin(a0) * R);
+      ctx.lineTo(srcX + Math.cos(a1) * R, srcY + Math.sin(a1) * R);
+      ctx.closePath();
+      ctx.fillStyle = grad;
+      ctx.fill();
+    }
+
+    for (var k = 0; k < 16; k++) {
+      var px = ((k * 137 + disco.t * 46) % (W + 120)) - 60;
+      var hue2 = (k * 52 + disco.t * 80) % 360;
+      ctx.fillStyle = 'hsla(' + hue2 + ',95%,68%,0.55)';
+      ctx.beginPath();
+      ctx.arc(px, groundY + 6 + (k % 3) * 8, 2.1 * scale, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    var fg = ctx.createLinearGradient(0, groundY, 0, H);
+    fg.addColorStop(0, 'rgba(255,255,255,0.09)');
+    fg.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = fg;
+    ctx.fillRect(0, groundY, W, H - groundY);
+
+    var vg = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.2, W / 2, H / 2, Math.max(W, H) * 0.8);
+    vg.addColorStop(0, 'rgba(0,0,0,0)');
+    vg.addColorStop(1, 'rgba(0,0,0,0.55)');
+    ctx.fillStyle = vg;
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.restore();
+  }
+
+  function drawGround() {
+    var a = 1 - disco.intensity * 0.75;
+    ctx.strokeStyle = 'rgba(203,214,226,' + a + ')';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, groundY + 0.5);
+    ctx.lineTo(W, groundY + 0.5);
+    ctx.stroke();
+  }
+
+  function drawTrash() {
+    if (!trash.visible) return;
+    trash.pop = Math.min(1, trash.pop + 0.06);
+    var p = trash.pop;
+    var w = trash.w * p;
+    var h = trash.h * p;
+    var x = trash.x, y = trash.y;
+
+    ctx.save();
+    ctx.strokeStyle = fgColor();
+    ctx.fillStyle = fillColor();
+    ctx.lineWidth = Math.max(1.8, 2.2 * scale);
+    ctx.lineJoin = 'round';
+
+    // body (trapezoid)
+    ctx.beginPath();
+    ctx.moveTo(x - w / 2 + w * 0.10, y - h * 0.86);
+    ctx.lineTo(x + w / 2 - w * 0.10, y - h * 0.86);
+    ctx.lineTo(x + w / 2 - w * 0.18, y);
+    ctx.lineTo(x - w / 2 + w * 0.18, y);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // lid
+    ctx.beginPath();
+    roundRect(x - w / 2, y - h, w, h * 0.16, h * 0.07);
+    ctx.fill();
+    ctx.stroke();
+
+    // handle
+    ctx.beginPath();
+    ctx.moveTo(x - w * 0.13, y - h);
+    ctx.lineTo(x - w * 0.13, y - h * 1.12);
+    ctx.lineTo(x + w * 0.13, y - h * 1.12);
+    ctx.lineTo(x + w * 0.13, y - h);
+    ctx.stroke();
+
+    // stripes
+    ctx.globalAlpha = 0.45;
+    ctx.beginPath();
+    ctx.moveTo(x - w * 0.13, y - h * 0.72); ctx.lineTo(x - w * 0.17, y - h * 0.16);
+    ctx.moveTo(x, y - h * 0.72); ctx.lineTo(x, y - h * 0.16);
+    ctx.moveTo(x + w * 0.13, y - h * 0.72); ctx.lineTo(x + w * 0.17, y - h * 0.16);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawBox() {
+    if (!box.visible) return;
+
+    var left = box.x - box.w / 2;
+    var top = box.y - box.h / 2;
+
+    // shadow
+    ctx.save();
+    ctx.globalAlpha = 0.07;
+    ctx.fillStyle = '#000';
+    ctx.beginPath();
+    ctx.ellipse(box.x, groundY + 3, box.w * 0.55, box.w * 0.16, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    ctx.save();
+    ctx.translate(left, top);
+    ctx.lineWidth = Math.max(1.6, 2 * scale);
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = fgColor();
+    ctx.fillStyle = fillColor();
+
+    roundRect(0, 0, box.w, box.h, 4 * scale);
+    ctx.fill();
+    ctx.stroke();
+
+    // lid hinged on the right
+    var lidH = Math.max(5, 7 * scale);
+    ctx.save();
+    ctx.translate(box.w, 0);
+    ctx.rotate(box.lidOpen * Math.PI * 0.62);
+    ctx.beginPath();
+    roundRect(-box.w, -lidH, box.w, lidH, 3 * scale);
+    ctx.globalAlpha = 0.92;
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+
+    ctx.restore();
+
+    // "drag me" hint
+    if (st.name === 'dragBox' && !drag.active) {
+      var pulse = 0.5 + 0.5 * Math.sin(clock * 4);
+      ctx.save();
+      ctx.setLineDash([7 * scale, 6 * scale]);
+      ctx.lineDashOffset = -clock * 28 * scale;
+      ctx.globalAlpha = 0.35 + 0.35 * pulse;
+      ctx.strokeStyle = '#e11d48';
+      ctx.lineWidth = Math.max(2, 2.4 * scale);
+      roundRect(left - 9 * scale, top - 9 * scale, box.w + 18 * scale, box.h + 18 * scale, 9 * scale);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  function drawRope() {
+    if (!box.visible || rope.alpha < 0.02) return;
+    if (!rope.init) return;
+
+    var bx = box.x + (sticky.facing < 0 ? box.w / 2 : -box.w / 2);
+    var by = box.y - box.h * 0.15;
+
+    var dist = Math.hypot(bx - rope.ax, by - rope.ay);
+    var ropeLen = 54 * scale;
+    var slack = Math.max(0, ropeLen - dist);
+    var sag = slack * 0.4 + 2 * scale;
+    var midX = (rope.ax + bx) / 2;
+    var midY = (rope.ay + by) / 2 + sag;
+
+    ctx.save();
+    ctx.globalAlpha = rope.alpha;
+    ctx.beginPath();
+    ctx.moveTo(rope.ax, rope.ay);
+    ctx.quadraticCurveTo(midX, midY, bx, by);
+    ctx.strokeStyle = fgColor();
+    ctx.lineWidth = Math.max(1.4, 1.8 * scale);
+    ctx.lineCap = 'round';
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function headScreenPos(c) {
+    var pose = getPose(c);
+    return [
+      c.x + pose.headC[0] * c.facing * scale,
+      groundY + c.jumpY - c.riseOffset + pose.headC[1] * scale
+    ];
+  }
+
+  function drawFace(c, headPt, f, sc) {
+    ctx.save();
+    ctx.translate(headPt[0], headPt[1]);
+    ctx.scale(f * sc, sc);
+
+    ctx.fillStyle = fgColor();
+    ctx.strokeStyle = fgColor();
+    ctx.lineCap = 'round';
+
+    // eyes
+    ctx.beginPath(); ctx.arc(-2.6, -1, 1.05, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(2.6, -1, 1.05, 0, Math.PI * 2); ctx.fill();
+
+    var emo = c.emotion;
+    ctx.lineWidth = 1.35;
+
+    if (emo === 'thinking') {
+      ctx.beginPath();
+      ctx.moveTo(-4.4, -4.6); ctx.lineTo(-1.8, -3.6);
+      ctx.moveTo(4.4, -4.6); ctx.lineTo(1.8, -3.6);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(-1.2, 3.9); ctx.lineTo(1.8, 3.9);
+      ctx.stroke();
+    } else if (emo === 'happy') {
+      ctx.beginPath();
+      ctx.arc(0.4, 2.4, 2.5, Math.PI * 0.16, Math.PI * 0.84);
+      ctx.stroke();
+    } else if (emo === 'surprised') {
+      ctx.beginPath();
+      ctx.arc(0.4, 3.5, 1.35, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(-4.2, -4.2); ctx.lineTo(-1.6, -3.9);
+      ctx.moveTo(4.2, -4.2); ctx.lineTo(1.6, -3.9);
+      ctx.stroke();
+    } else if (emo === 'sad') {
+      ctx.beginPath();
+      ctx.arc(0.4, 5.2, 2.4, Math.PI * 1.15, Math.PI * 1.85);
+      ctx.stroke();
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(-1.4, 3.9); ctx.lineTo(2.2, 3.9);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+
+  function drawChar(c) {
+    if (!c.visible || c.alpha <= 0.01) return;
+
+    var pose = getPose(c);
+    var f = c.facing;
+    var sc = scale;
+
+    // shadow
+    ctx.save();
+    var shadowAlpha = 0.085 * (1 - Math.min(1, -c.jumpY / (140 * sc)));
+    ctx.globalAlpha = Math.max(0, shadowAlpha) * c.alpha;
+    ctx.fillStyle = '#000';
+    ctx.beginPath();
+    ctx.ellipse(c.x, groundY + 3, 22 * sc, 5.2 * sc, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    ctx.save();
+    ctx.globalAlpha = c.alpha;
+    ctx.translate(c.x, groundY + c.jumpY - c.riseOffset);
+
+    var pivotY = pose.hip[1] * sc;
+    ctx.translate(0, pivotY);
+    ctx.rotate(c.rotation);
+    ctx.translate(0, -pivotY);
+
+    function P(x, y) { return [x * f * sc, y * sc]; }
+
+    var baseW = Math.max(2.4, 4.2 * sc);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    var C = fgColor();
+
+    function line(a, b, w) {
+      var A = P(a[0], a[1]), B = P(b[0], b[1]);
+      ctx.beginPath();
+      ctx.moveTo(A[0], A[1]);
+      ctx.lineTo(B[0], B[1]);
+      ctx.lineWidth = w;
+      ctx.strokeStyle = C;
+      ctx.stroke();
+    }
+
+    function drawFoot(leg, w) {
+      var knee = leg[0], ankle = leg[1];
+      var sx = ankle[0] - knee[0], sy = ankle[1] - knee[1];
+      var len = Math.sqrt(sx * sx + sy * sy) || 1;
+      sx /= len; sy /= len;
+      line(ankle, [ankle[0] + sy * 8, ankle[1] - sx * 8], w);
+    }
+
+    // far side
+    line(pose.hip, pose.legFar[0], baseW * 0.82);
+    line(pose.legFar[0], pose.legFar[1], baseW * 0.82);
+    drawFoot(pose.legFar, baseW * 0.82);
+    line(pose.shoulder, pose.armFar.elbow, baseW * 0.82);
+    line(pose.armFar.elbow, pose.armFar.hand, baseW * 0.82);
+
+    // torso
+    line(pose.hip, pose.torsoTop, baseW);
+
+    // head
+    var hc = P(pose.headC[0], pose.headC[1]);
+    ctx.beginPath();
+    ctx.ellipse(hc[0], hc[1], Math.abs(f) * CFG.headR * sc, CFG.headR * sc, 0, 0, Math.PI * 2);
+    ctx.fillStyle = fillColor();
+    ctx.fill();
+    ctx.lineWidth = baseW;
+    ctx.strokeStyle = C;
+    ctx.stroke();
+
+    drawFace(c, hc, f, sc);
+
+    // near side
+    line(pose.hip, pose.legNear[0], baseW);
+    line(pose.legNear[0], pose.legNear[1], baseW);
+    drawFoot(pose.legNear, baseW);
+    line(pose.shoulder, pose.armNear.elbow, baseW);
+    line(pose.armNear.elbow, pose.armNear.hand, baseW);
+
+    ctx.restore();
+  }
+
+  function drawParts() {
+    for (var i = 0; i < parts.length; i++) {
+      var p = parts[i];
+      var a = Math.min(1, p.life / p.max) * p.alphaMax;
+      ctx.fillStyle = 'rgba(' + p.col + ',' + a.toFixed(3) + ')';
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  function wrapText(text, maxW) {
+    var words = text.split(' ');
+    var lines = [], cur = '';
+    for (var i = 0; i < words.length; i++) {
+      var test = cur ? cur + ' ' + words[i] : words[i];
+      if (ctx.measureText(test).width > maxW && cur) { lines.push(cur); cur = words[i]; }
+      else cur = test;
+    }
+    if (cur) lines.push(cur);
+    return lines;
+  }
+
+  function drawSpeech() {
+    if (!speech.visible || !speech.char || !speech.char.visible) return;
+
+    var head = headScreenPos(speech.char);
+    var headR = CFG.headR * scale;
+
+    var fs = Math.max(14, Math.min(19, 15 * scale));
+    var font = '600 ' + fs.toFixed(1) + 'px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+    ctx.font = font;
+
+    var padX = fs * 0.85, padY = fs * 0.7, lh = fs * 1.32;
+    var maxW = Math.min(W * 0.62, 360);
+
+    var lines = wrapText(speech.text, maxW);
+    var textW = 0;
+    for (var i = 0; i < lines.length; i++) textW = Math.max(textW, ctx.measureText(lines[i]).width);
+
+    var bw = textW + padX * 2;
+    var bh = lines.length * lh + padY * 2;
+    var tailH = Math.max(10, 15 * scale);
+    var gap = tailH + 6 * scale;
+
+    var bx = clamp(head[0] - bw / 2, 10, W - bw - 10);
+    var by = Math.max(10, head[1] - headR - gap - bh);
+
+    speech.rect = { x: bx, y: by, w: bw, h: bh };
+
+    var t = Math.max(0.001, speech.anim);
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, speech.anim * 1.7);
+
+    var cxb = bx + bw / 2, cyb = by + bh / 2;
+    ctx.translate(cxb, cyb);
+    ctx.scale(t, t);
+    ctx.translate(-cxb, -cyb);
+
+    var stroke = Math.max(1.5, 2 * scale);
+    var radius = Math.min(16, bh * 0.34);
+
+    var tx = clamp(head[0], bx + 16, bx + bw - 16);
+    ctx.beginPath();
+    ctx.moveTo(tx - 8, by + bh - 1);
+    ctx.lineTo(tx + 8, by + bh - 1);
+    ctx.lineTo(head[0], by + bh + tailH);
+    ctx.closePath();
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+    ctx.lineWidth = stroke;
+    ctx.strokeStyle = '#0f172a';
+    ctx.stroke();
+
+    ctx.shadowColor = 'rgba(15,23,42,0.14)';
+    ctx.shadowBlur = 16 * scale;
+    ctx.shadowOffsetY = 5 * scale;
+
+    roundRect(bx, by, bw, bh, radius);
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+    ctx.shadowColor = 'transparent';
+    ctx.lineWidth = stroke;
+    ctx.strokeStyle = '#0f172a';
+    ctx.stroke();
+
+    ctx.font = font;
+    ctx.fillStyle = '#0f172a';
+    ctx.textBaseline = 'top';
+    ctx.textAlign = 'left';
+
+    var remain = Math.floor(speech.shown);
+    for (var j = 0; j < lines.length; j++) {
+      if (remain <= 0) break;
+      ctx.fillText(lines[j].slice(0, remain), bx + padX, by + padY + j * lh);
+      remain -= lines[j].length + 1;
+    }
+
+    ctx.restore();
+  }
+
+  function positionUI() {
+    if (!speech.visible || !speech.choices || !speech.rect) {
+      choicesEl.style.display = 'none';
+      return;
+    }
+    choicesEl.style.display = 'flex';
+    choicesEl.style.left = (speech.rect.x + speech.rect.w / 2) + 'px';
+    choicesEl.style.top = (speech.rect.y + speech.rect.h + 12) + 'px';
+  }
+
+  function render() {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, W, H);
+
+    drawDisco();
+
+    // screen shake
+    if (shake > 0.3) {
+      ctx.save();
+      ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
+    }
+
+    drawGround();
+    drawTrash();
+    drawBox();
+    drawRope();
+    drawChar(sticky);
+    drawChar(buba);
+    drawParts();
+
+    if (shake > 0.3) ctx.restore();
+
+    // flash
+    if (flash > 0.01) {
+      ctx.save();
+      ctx.globalAlpha = Math.min(1, flash);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, W, H);
+      ctx.restore();
+    }
+
+    drawSpeech();
+
+    // fade to black
+    if (blackout > 0.001) {
+      ctx.save();
+      ctx.globalAlpha = blackout;
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(0, 0, W, H);
+      ctx.restore();
+    }
+
+    positionUI();
+  }
+
+  /* ============================================================
+     BOX DRAGGING
+     ============================================================ */
+  var drag = { active: false, ox: 0, oy: 0 };
+
+  function pointInBox(x, y) {
+    return x >= box.x - box.w / 2 - 12 * scale && x <= box.x + box.w / 2 + 12 * scale &&
+           y >= box.y - box.h / 2 - 12 * scale && y <= box.y + box.h / 2 + 12 * scale;
+  }
+
+  cv.addEventListener('pointerdown', function (e) {
+    if (st.name !== 'dragBox' || !box.visible || box.animTrash) return;
+    if (!pointInBox(e.clientX, e.clientY)) return;
+    drag.active = true;
+    drag.ox = e.clientX - box.x;
+    drag.oy = e.clientY - box.y;
+    cv.style.cursor = 'grabbing';
+    try { cv.setPointerCapture(e.pointerId); } catch (err) {}
+  });
+
+  cv.addEventListener('pointermove', function (e) {
+    if (!drag.active) {
+      if (st.name === 'dragBox' && box.visible && pointInBox(e.clientX, e.clientY)) {
+        cv.style.cursor = 'grab';
+      } else if (st.name === 'dragBox') {
+        cv.style.cursor = 'default';
+      }
+      return;
+    }
+    box.x = clamp(e.clientX - drag.ox, box.w / 2 + 4, W - box.w / 2 - 4);
+    box.y = clamp(e.clientY - drag.oy, 30, groundY - box.h / 2);
+  });
+
+  function endDrag() {
+    if (!drag.active) return;
+    drag.active = false;
+    cv.style.cursor = 'default';
+
+    var dx = box.x - trash.x;
+    var dy = box.y - (trash.y - trash.h * 0.5);
+    var near = Math.hypot(dx, dy) < 95 * scale;
+
+    if (near && trash.visible) {
+      box.animTrash = { t: 0, x0: box.x, y0: box.y, w0: box.w };
+      go('inTrash');
+    } else {
+      box.y = groundY - box.h / 2;
+    }
+  }
+
+  cv.addEventListener('pointerup', endDrag);
+  cv.addEventListener('pointercancel', endDrag);
+  window.addEventListener('blur', endDrag);
+
+  /* ============================================================
+     MAIN LOOP
+     ============================================================ */
+  var lastTime = performance.now();
+
+  function loop(now) {
+    var dt = (now - lastTime) / 1000;
+    lastTime = now;
+    if (dt > 0.05) dt = 0.05;
+    clock += dt;
+
+    updateChar(sticky, dt);
+    updateChar(buba, dt);
+    updateBox(dt);
+    updateParts(dt);
+    updateDisco(dt);
+
+    step(dt);
+
+    updateSpeech(dt);
+    shake *= Math.pow(0.004, dt);
+    flash *= Math.pow(0.0006, dt);
+
+    render();
+    requestAnimationFrame(loop);
+  }
+
+  resize();
+  requestAnimationFrame(function (t) {
+    lastTime = t;
+    requestAnimationFrame(loop);
+  });
+
+})();
+</script>
+</body>
+</html>
